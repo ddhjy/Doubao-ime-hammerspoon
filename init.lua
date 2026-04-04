@@ -3,18 +3,17 @@
 -- 放到 ~/.hammerspoon/init.lua
 -- 版本：保持当前可用行为，只修监听容易失效的问题
 -- ============================================
-
 local log = hs.logger.new("RightCmdIME", "debug")
 local alert = hs.alert
 
 -- 目标输入法
-local TARGET_INPUT_SOURCE = "com.bytedance.inputmethod.doubaoime.pinyin"
+local TARGET_INPUT_SOURCE = "豆包输入法"
 
 -- 右侧 Command 按下后，多久再执行双击左 Option（秒）
 local OPTION_PRESS_DELAY = 0.30
 
 -- 两次 Option 点击之间的间隔（秒）
-local OPTION_DOUBLE_TAP_INTERVAL = 0.08
+local OPTION_DOUBLE_TAP_INTERVAL = 0.18
 
 -- 松开右 Command 后，延迟多久恢复原输入法（秒）
 local RESTORE_IME_DELAY = 2.0
@@ -29,13 +28,34 @@ local optionPressTimer = nil
 local restoreImeTimer = nil
 
 local function nowSource()
-    return hs.keycodes.currentSourceID()
+    local method = hs.keycodes.currentMethod()
+    if method ~= nil then
+        return {
+            kind = "method",
+            value = method
+        }
+    end
+
+    local layout = hs.keycodes.currentLayout()
+    if layout ~= nil then
+        return {
+            kind = "layout",
+            value = layout
+        }
+    end
+
+    return nil
+end
+
+local function debugCurrentInputState(prefix)
+    log.df("[%s] currentMethod   = %s", prefix, tostring(hs.keycodes.currentMethod()))
+    log.df("[%s] currentLayout   = %s", prefix, tostring(hs.keycodes.currentLayout()))
+    log.df("[%s] currentSourceID = %s", prefix, tostring(hs.keycodes.currentSourceID()))
 end
 
 local function tapLeftOptionOnce()
     hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, true):post()
     hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, false):post()
-    log.df("已模拟单击左 Option")
 end
 
 local function doubleTapLeftOption()
@@ -67,32 +87,51 @@ end
 local function switchToTargetIME()
     local current = nowSource()
     previousInputSource = current
-    log.df("记录当前输入法: %s", tostring(current))
 
-    if current == TARGET_INPUT_SOURCE then
+    -- 如果有输入法 XD
+    if current == nil then
+        log.df("无法识别当前输入来源，跳过记录")
+    end
+
+    debugCurrentInputState("before switch")
+
+    if current ~= nil and current.kind == "method" and current.value == TARGET_INPUT_SOURCE then
         log.df("当前已经是目标输入法，无需切换: %s", TARGET_INPUT_SOURCE)
         return
     end
 
-    local ok = hs.keycodes.currentSourceID(TARGET_INPUT_SOURCE)
+    local ok = hs.keycodes.setMethod(TARGET_INPUT_SOURCE)
     log.df("切换到目标输入法: %s, 结果: %s", TARGET_INPUT_SOURCE, tostring(ok))
+
+    -- debugCurrentInputState("after switch")
 end
 
 local function restorePreviousIME()
     if not previousInputSource then
-        log.df("没有记录到之前的输入法，跳过恢复")
-        return
-    end
-
-    if previousInputSource == TARGET_INPUT_SOURCE then
-        log.df("之前输入法本来就是目标输入法，无需恢复")
-        previousInputSource = nil
+        log.df("没有记录到之前的输入来源，跳过恢复")
         return
     end
 
     local old = previousInputSource
-    local ok = hs.keycodes.currentSourceID(old)
-    log.df("恢复之前输入法: %s, 结果: %s", tostring(old), tostring(ok))
+
+    log.df("准备恢复之前输入来源: kind=%s, value=%s", tostring(old.kind), tostring(old.value))
+
+    -- debugCurrentInputState("before restore")
+    local ok = false
+
+    if old.kind == "method" then
+        ok = hs.keycodes.setMethod(old.value)
+        log.df("恢复之前输入法 method: %s, 结果: %s", tostring(old.value), tostring(ok))
+
+    elseif old.kind == "layout" then
+        ok = hs.keycodes.setLayout(old.value)
+        log.df("恢复之前键盘布局 layout: %s, 结果: %s", tostring(old.value), tostring(ok))
+    else
+        -- 被玩坏了才可能走到这里，让我看看是哪个小伙伴这么坏！！
+        log.df("未知的输入来源类型，无法恢复: %s", hs.inspect(old))
+    end
+
+    -- debugCurrentInputState("after restore")
     previousInputSource = nil
 end
 
@@ -161,15 +200,8 @@ local function handleRightCmdFlagsChanged(event)
         return false
     end
 
-    log.df(
-        "flagsChanged: keycode=%s, cmd=%s, alt=%s, shift=%s, ctrl=%s, rightCmdIsDown=%s",
-        tostring(keycode),
-        tostring(flags.cmd),
-        tostring(flags.alt),
-        tostring(flags.shift),
-        tostring(flags.ctrl),
-        tostring(rightCmdIsDown)
-    )
+    -- log.df("flagsChanged: keycode=%s, cmd=%s, alt=%s, shift=%s, ctrl=%s, rightCmdIsDown=%s", tostring(keycode),
+    --     tostring(flags.cmd), tostring(flags.alt), tostring(flags.shift), tostring(flags.ctrl), tostring(rightCmdIsDown))
 
     if rightCmdIsDown then
         onRightCmdUp()
@@ -195,10 +227,7 @@ local function safeEventHandler(event)
 end
 
 -- 放到全局，尽量避免 reload / GC 等边缘情况
-_G.rightCmdWatcher = hs.eventtap.new(
-    { hs.eventtap.event.types.flagsChanged },
-    safeEventHandler
-)
+_G.rightCmdWatcher = hs.eventtap.new({hs.eventtap.event.types.flagsChanged}, safeEventHandler)
 
 _G.rightCmdWatcher:start()
 
