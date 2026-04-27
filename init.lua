@@ -21,7 +21,10 @@ local NORMAL_ENGLISH_KEYBOARD_LAYOUT = "U.S."
 
 -- Timing knobs for the tap-to-toggle model.
 local ACTION_AFTER_FN_UP_DELAY = 0.12
-local VOICE_TRIGGER_AFTER_SWITCH_DELAY = 0.45
+local VOICE_TRIGGER_AFTER_SWITCH_DELAY = 0.35
+local INPUT_SOURCE_SWITCH_TIMEOUT = 2.0
+local INPUT_SOURCE_POLL_INTERVAL = 0.05
+local INPUT_METHOD_BRIDGE_DELAY = 0.15
 local OPTION_TAP_HOLD_DURATION = 0.06
 local OPTION_DOUBLE_TAP_INTERVAL = 0.18
 local RESTORE_AFTER_VOICE_STOP_DELAY = 0.35
@@ -31,6 +34,7 @@ local KEYCODE_FN = 63
 local KEYCODE_SPACE = 49
 
 local previousInputSource = nil
+local sourceBeforeFnTap = nil
 local doubaoVoiceActive = false
 local fnIsDown = false
 local fnWasUsedWithOtherKey = false
@@ -75,6 +79,50 @@ local function setDoubaoIME()
     local ok = hs.keycodes.setMethod(TARGET_INPUT_METHOD)
     log.df("切换到豆包输入法: %s, 结果: %s", TARGET_INPUT_METHOD, tostring(ok))
     return ok
+end
+
+local function isDoubaoIMEActive()
+    return hs.keycodes.currentSourceID() == TARGET_INPUT_SOURCE_ID
+        or hs.keycodes.currentMethod() == TARGET_INPUT_METHOD
+end
+
+local function isNormalChineseInputMethodActive()
+    return hs.keycodes.currentMethod() == NORMAL_CHINESE_INPUT_METHOD
+end
+
+local function waitForInputSource(description, isReady, onReady, deadline)
+    if isReady() then
+        onReady()
+        return
+    end
+
+    deadline = deadline or (hs.timer.secondsSinceEpoch() + INPUT_SOURCE_SWITCH_TIMEOUT)
+
+    if hs.timer.secondsSinceEpoch() >= deadline then
+        log.ef("等待%s生效超时: currentSourceID=%s, currentMethod=%s, currentLayout=%s",
+            description,
+            tostring(hs.keycodes.currentSourceID()),
+            tostring(hs.keycodes.currentMethod()),
+            tostring(hs.keycodes.currentLayout()))
+        alert.show(description .. "切换超时")
+        return
+    end
+
+    hs.timer.doAfter(INPUT_SOURCE_POLL_INTERVAL, function()
+        waitForInputSource(description, isReady, onReady, deadline)
+    end)
+end
+
+local function waitForDoubaoIME(onReady)
+    waitForInputSource("豆包输入法", isDoubaoIMEActive, function()
+        hs.timer.doAfter(VOICE_TRIGGER_AFTER_SWITCH_DELAY, onReady)
+    end)
+end
+
+local function waitForNormalChineseInputMethod(onReady)
+    waitForInputSource("日常中文输入法", isNormalChineseInputMethodActive, function()
+        hs.timer.doAfter(INPUT_METHOD_BRIDGE_DELAY, onReady)
+    end)
 end
 
 local function restorePreviousIME()
@@ -157,22 +205,42 @@ end
 
 local function startDoubaoVoice()
     cancelRestoreImeTimer()
-    previousInputSource = nowSource()
+    previousInputSource = sourceBeforeFnTap or nowSource()
+    sourceBeforeFnTap = nil
 
-    if hs.keycodes.currentSourceID() ~= TARGET_INPUT_SOURCE_ID
-        and hs.keycodes.currentMethod() ~= TARGET_INPUT_METHOD then
-        if not setDoubaoIME() then
+    local function switchToDoubaoAndTrigger()
+        if not isDoubaoIMEActive() and not setDoubaoIME() then
             alert.show("未能切换到豆包输入法")
+            return
+        end
+
+        waitForDoubaoIME(function()
+            doubleTapLeftOption(function()
+                doubaoVoiceActive = true
+                log.df("豆包语音输入已启动，等待再次按 Fn 停止")
+            end)
+        end)
+    end
+
+    if isDoubaoIMEActive() then
+        switchToDoubaoAndTrigger()
+        return
+    end
+
+    if previousInputSource and previousInputSource.kind == "layout" then
+        local ok = hs.keycodes.setMethod(NORMAL_CHINESE_INPUT_METHOD)
+        log.df("当前是键盘布局 %s，先桥接到日常中文输入法 %s，结果: %s",
+            tostring(previousInputSource.value),
+            NORMAL_CHINESE_INPUT_METHOD,
+            tostring(ok))
+
+        if ok then
+            waitForNormalChineseInputMethod(switchToDoubaoAndTrigger)
             return
         end
     end
 
-    hs.timer.doAfter(VOICE_TRIGGER_AFTER_SWITCH_DELAY, function()
-        doubleTapLeftOption(function()
-            doubaoVoiceActive = true
-            log.df("豆包语音输入已启动，等待再次按 Fn 停止")
-        end)
-    end)
+    switchToDoubaoAndTrigger()
 end
 
 local function stopDoubaoVoice()
@@ -208,6 +276,7 @@ local function handleFnFlagsChanged(event)
     if flags.fn and not fnIsDown then
         fnIsDown = true
         fnWasUsedWithOtherKey = false
+        sourceBeforeFnTap = nowSource()
         return true
     end
 
@@ -216,6 +285,8 @@ local function handleFnFlagsChanged(event)
 
         if not fnWasUsedWithOtherKey then
             scheduleDoubaoToggle()
+        else
+            sourceBeforeFnTap = nil
         end
 
         fnWasUsedWithOtherKey = false
