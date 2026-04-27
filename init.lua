@@ -1,30 +1,40 @@
 -- ============================================
--- Right Command -> switch IME -> double tap Left Option
--- 放到 ~/.hammerspoon/init.lua
--- 版本：保持当前可用行为，只修监听容易失效的问题
+-- Fn tap -> Doubao voice input -> restore IME
+-- Put this file at ~/.hammerspoon/init.lua
 -- ============================================
-local log = hs.logger.new("RightCmdIME", "debug")
+
+pcall(function()
+    hs.ipc.cliInstall()
+end)
+
+local log = hs.logger.new("DoubaoVoice", "debug")
 local alert = hs.alert
 
--- 目标输入法
-local TARGET_INPUT_SOURCE = "豆包输入法"
+-- Doubao IME as installed on macOS:
+--   /Library/Input Methods/DoubaoIme.app
+local TARGET_INPUT_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
+local TARGET_INPUT_METHOD = "豆包输入法"
 
--- 右侧 Command 按下后，多久再执行双击左 Option（秒）
-local OPTION_PRESS_DELAY = 0.30
+-- Daily input sources. Ctrl+Space toggles only between these two.
+local NORMAL_CHINESE_INPUT_METHOD = "Squirrel - Simplified"
+local NORMAL_ENGLISH_KEYBOARD_LAYOUT = "U.S."
 
--- 两次 Option 点击之间的间隔（秒）
+-- Timing knobs for the tap-to-toggle model.
+local ACTION_AFTER_FN_UP_DELAY = 0.12
+local VOICE_TRIGGER_AFTER_SWITCH_DELAY = 0.45
+local OPTION_TAP_HOLD_DURATION = 0.06
 local OPTION_DOUBLE_TAP_INTERVAL = 0.18
+local RESTORE_AFTER_VOICE_STOP_DELAY = 0.35
 
--- 松开右 Command 后，延迟多久恢复原输入法（秒）
-local RESTORE_IME_DELAY = 2.0
+local KEYCODE_OPTION = 58
+local KEYCODE_FN = 63
+local KEYCODE_SPACE = 49
 
--- 物理按键 keycode
-local KEYCODE_RIGHT_CMD = 54
-
--- 状态变量
 local previousInputSource = nil
-local rightCmdIsDown = false
-local optionPressTimer = nil
+local doubaoVoiceActive = false
+local fnIsDown = false
+local fnWasUsedWithOtherKey = false
+local pendingActionTimer = nil
 local restoreImeTimer = nil
 
 local function nowSource()
@@ -47,32 +57,10 @@ local function nowSource()
     return nil
 end
 
-local function debugCurrentInputState(prefix)
-    log.df("[%s] currentMethod   = %s", prefix, tostring(hs.keycodes.currentMethod()))
-    log.df("[%s] currentLayout   = %s", prefix, tostring(hs.keycodes.currentLayout()))
-    log.df("[%s] currentSourceID = %s", prefix, tostring(hs.keycodes.currentSourceID()))
-end
-
-local function tapLeftOptionOnce()
-    hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, true):post()
-    hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, false):post()
-end
-
-local function doubleTapLeftOption()
-    log.df("开始模拟双击左 Option")
-    tapLeftOptionOnce()
-
-    hs.timer.doAfter(OPTION_DOUBLE_TAP_INTERVAL, function()
-        tapLeftOptionOnce()
-        log.df("已完成双击左 Option")
-    end)
-end
-
-local function cancelOptionTimer()
-    if optionPressTimer then
-        optionPressTimer:stop()
-        optionPressTimer = nil
-        log.df("已取消待执行的 Option 定时器")
+local function cancelPendingActionTimer()
+    if pendingActionTimer then
+        pendingActionTimer:stop()
+        pendingActionTimer = nil
     end
 end
 
@@ -80,30 +68,13 @@ local function cancelRestoreImeTimer()
     if restoreImeTimer then
         restoreImeTimer:stop()
         restoreImeTimer = nil
-        log.df("已取消待执行的输入法恢复定时器")
     end
 end
 
-local function switchToTargetIME()
-    local current = nowSource()
-    previousInputSource = current
-
-    -- 如果有输入法 XD
-    if current == nil then
-        log.df("无法识别当前输入来源，跳过记录")
-    end
-
-    debugCurrentInputState("before switch")
-
-    if current ~= nil and current.kind == "method" and current.value == TARGET_INPUT_SOURCE then
-        log.df("当前已经是目标输入法，无需切换: %s", TARGET_INPUT_SOURCE)
-        return
-    end
-
-    local ok = hs.keycodes.setMethod(TARGET_INPUT_SOURCE)
-    log.df("切换到目标输入法: %s, 结果: %s", TARGET_INPUT_SOURCE, tostring(ok))
-
-    -- debugCurrentInputState("after switch")
+local function setDoubaoIME()
+    local ok = hs.keycodes.setMethod(TARGET_INPUT_METHOD)
+    log.df("切换到豆包输入法: %s, 结果: %s", TARGET_INPUT_METHOD, tostring(ok))
+    return ok
 end
 
 local function restorePreviousIME()
@@ -113,125 +84,224 @@ local function restorePreviousIME()
     end
 
     local old = previousInputSource
-
-    log.df("准备恢复之前输入来源: kind=%s, value=%s", tostring(old.kind), tostring(old.value))
-
-    -- debugCurrentInputState("before restore")
     local ok = false
 
     if old.kind == "method" then
         ok = hs.keycodes.setMethod(old.value)
         log.df("恢复之前输入法 method: %s, 结果: %s", tostring(old.value), tostring(ok))
-
     elseif old.kind == "layout" then
         ok = hs.keycodes.setLayout(old.value)
         log.df("恢复之前键盘布局 layout: %s, 结果: %s", tostring(old.value), tostring(ok))
-    else
-        -- 被玩坏了才可能走到这里，让我看看是哪个小伙伴这么坏！！
-        log.df("未知的输入来源类型，无法恢复: %s", hs.inspect(old))
     end
 
-    -- debugCurrentInputState("after restore")
     previousInputSource = nil
 end
 
-local function scheduleRestorePreviousIME()
-    cancelRestoreImeTimer()
-
-    restoreImeTimer = hs.timer.doAfter(RESTORE_IME_DELAY, function()
-        restoreImeTimer = nil
-        log.df("延迟 %.2f 秒后，开始恢复之前输入法", RESTORE_IME_DELAY)
-        restorePreviousIME()
-    end)
-
-    log.df("已安排 %.2f 秒后恢复之前输入法", RESTORE_IME_DELAY)
+local function modifiersAreClear()
+    local mods = hs.eventtap.checkKeyboardModifiers()
+    return not mods.cmd and not mods.alt and not mods.shift and not mods.ctrl and not mods.fn
 end
 
-local function onRightCmdDown()
-    if rightCmdIsDown then
-        log.df("右 Command 已处于按下状态，忽略重复事件")
+local function runWhenModifiersClear(fn, attemptsLeft)
+    attemptsLeft = attemptsLeft or 20
+
+    if modifiersAreClear() or attemptsLeft <= 0 then
+        fn()
         return
     end
 
-    rightCmdIsDown = true
-    log.df("检测到右 Command 按下")
+    hs.timer.doAfter(0.05, function()
+        runWhenModifiersClear(fn, attemptsLeft - 1)
+    end)
+end
 
-    -- 新一轮开始时，取消上一次尚未执行的恢复动作
-    cancelRestoreImeTimer()
+local function postLeftOptionFlagsChanged(isDown)
+    local rawMasks = hs.eventtap.event.rawFlagMasks
+    local rawFlags = rawMasks.nonCoalesced
 
-    switchToTargetIME()
+    if isDown then
+        rawFlags = rawFlags + rawMasks.alternate + rawMasks.deviceLeftAlternate
+    end
 
-    cancelOptionTimer()
-    optionPressTimer = hs.timer.doAfter(OPTION_PRESS_DELAY, function()
-        optionPressTimer = nil
+    hs.eventtap.event.newEvent()
+        :setType(hs.eventtap.event.types.flagsChanged)
+        :setProperty(hs.eventtap.event.properties.keyboardEventKeycode, KEYCODE_OPTION)
+        :setFlags(isDown and {alt = true} or {})
+        :rawFlags(rawFlags)
+        :post()
+end
 
-        if rightCmdIsDown then
-            log.df("延迟结束，右 Command 仍按着，准备双击左 Option")
-            doubleTapLeftOption()
-        else
-            log.df("延迟结束时右 Command 已松开，不再双击左 Option")
+local function tapLeftOptionOnce(done)
+    postLeftOptionFlagsChanged(true)
+
+    hs.timer.doAfter(OPTION_TAP_HOLD_DURATION, function()
+        postLeftOptionFlagsChanged(false)
+
+        if done then
+            done()
         end
     end)
 end
 
-local function onRightCmdUp()
-    if not rightCmdIsDown then
-        log.df("右 Command 当前并非按下状态，忽略松开事件")
-        return
-    end
+local function doubleTapLeftOption(done)
+    runWhenModifiersClear(function()
+        log.df("发送豆包语音快捷键：左 Option 双击")
 
-    rightCmdIsDown = false
-    log.df("检测到右 Command 松开")
-
-    cancelOptionTimer()
-    doubleTapLeftOption()
-
-    -- 延迟恢复原输入法
-    scheduleRestorePreviousIME()
+        tapLeftOptionOnce(function()
+            hs.timer.doAfter(OPTION_DOUBLE_TAP_INTERVAL, function()
+                tapLeftOptionOnce(done)
+            end)
+        end)
+    end)
 end
 
--- 核心修复 1：只要检测到 rightcmd 的 flagsChanged，
--- 就根据内部状态翻转，而不是依赖 flags.cmd
-local function handleRightCmdFlagsChanged(event)
-    local keycode = event:getKeyCode()
-    local flags = event:getFlags()
+local function startDoubaoVoice()
+    cancelRestoreImeTimer()
+    previousInputSource = nowSource()
 
-    if keycode ~= KEYCODE_RIGHT_CMD then
-        return false
+    if hs.keycodes.currentSourceID() ~= TARGET_INPUT_SOURCE_ID
+        and hs.keycodes.currentMethod() ~= TARGET_INPUT_METHOD then
+        if not setDoubaoIME() then
+            alert.show("未能切换到豆包输入法")
+            return
+        end
     end
 
-    -- log.df("flagsChanged: keycode=%s, cmd=%s, alt=%s, shift=%s, ctrl=%s, rightCmdIsDown=%s", tostring(keycode),
-    --     tostring(flags.cmd), tostring(flags.alt), tostring(flags.shift), tostring(flags.ctrl), tostring(rightCmdIsDown))
+    hs.timer.doAfter(VOICE_TRIGGER_AFTER_SWITCH_DELAY, function()
+        doubleTapLeftOption(function()
+            doubaoVoiceActive = true
+            log.df("豆包语音输入已启动，等待再次按 Fn 停止")
+        end)
+    end)
+end
 
-    if rightCmdIsDown then
-        onRightCmdUp()
+local function stopDoubaoVoice()
+    doubleTapLeftOption(function()
+        doubaoVoiceActive = false
+
+        cancelRestoreImeTimer()
+        restoreImeTimer = hs.timer.doAfter(RESTORE_AFTER_VOICE_STOP_DELAY, restorePreviousIME)
+        log.df("豆包语音输入已停止，已安排恢复之前输入法")
+    end)
+end
+
+local function toggleDoubaoVoice()
+    if doubaoVoiceActive then
+        stopDoubaoVoice()
     else
-        onRightCmdDown()
+        startDoubaoVoice()
+    end
+end
+
+local function scheduleDoubaoToggle()
+    cancelPendingActionTimer()
+
+    pendingActionTimer = hs.timer.doAfter(ACTION_AFTER_FN_UP_DELAY, function()
+        pendingActionTimer = nil
+        toggleDoubaoVoice()
+    end)
+end
+
+local function handleFnFlagsChanged(event)
+    local flags = event:getFlags()
+
+    if flags.fn and not fnIsDown then
+        fnIsDown = true
+        fnWasUsedWithOtherKey = false
+        return true
+    end
+
+    if not flags.fn and fnIsDown then
+        fnIsDown = false
+
+        if not fnWasUsedWithOtherKey then
+            scheduleDoubaoToggle()
+        end
+
+        fnWasUsedWithOtherKey = false
+        return true
     end
 
     return false
 end
 
--- 核心修复 2：避免回调异常导致 watcher 看起来“死掉”
-local function safeEventHandler(event)
-    local ok, result = xpcall(function()
-        return handleRightCmdFlagsChanged(event)
+local function safeFnHandler(event)
+    local ok, shouldDelete = xpcall(function()
+        return handleFnFlagsChanged(event)
     end, debug.traceback)
 
     if not ok then
-        log.ef("eventtap 回调报错:\n%s", tostring(result))
+        log.ef("Fn 回调报错:\n%s", tostring(shouldDelete))
+        return false
+    end
+
+    return shouldDelete
+end
+
+local function toggleNormalInputSource()
+    local currentSourceID = hs.keycodes.currentSourceID()
+    local currentMethod = hs.keycodes.currentMethod()
+    local currentLayout = hs.keycodes.currentLayout()
+
+    log.df("Ctrl+Space: currentSourceID=%s, currentMethod=%s, currentLayout=%s",
+        tostring(currentSourceID), tostring(currentMethod), tostring(currentLayout))
+
+    if currentSourceID == TARGET_INPUT_SOURCE_ID or currentMethod == NORMAL_CHINESE_INPUT_METHOD then
+        local ok = hs.keycodes.setLayout(NORMAL_ENGLISH_KEYBOARD_LAYOUT)
+        log.df("Ctrl+Space: 切换到英文键盘布局 %s, 结果: %s",
+            NORMAL_ENGLISH_KEYBOARD_LAYOUT, tostring(ok))
+        return
+    end
+
+    local ok = hs.keycodes.setMethod(NORMAL_CHINESE_INPUT_METHOD)
+    log.df("Ctrl+Space: 切换到中文输入法 %s, 结果: %s",
+        NORMAL_CHINESE_INPUT_METHOD, tostring(ok))
+end
+
+local function handleKeyDown(event)
+    if fnIsDown and event:getKeyCode() ~= KEYCODE_FN then
+        fnWasUsedWithOtherKey = true
+    end
+
+    if event:getKeyCode() ~= KEYCODE_SPACE then
+        return false
+    end
+
+    local flags = event:getFlags()
+    if not flags.ctrl or flags.cmd or flags.alt or flags.shift or flags.fn then
+        return false
+    end
+
+    local isRepeat = event:getProperty(hs.eventtap.event.properties.keyboardEventAutorepeat) == 1
+    if not isRepeat then
+        toggleNormalInputSource()
+    end
+
+    return true
+end
+
+local function safeKeyDownHandler(event)
+    local ok, result = xpcall(function()
+        return handleKeyDown(event)
+    end, debug.traceback)
+
+    if not ok then
+        log.ef("keyDown 回调报错:\n%s", tostring(result))
         return false
     end
 
     return result
 end
 
--- 放到全局，尽量避免 reload / GC 等边缘情况
-_G.rightCmdWatcher = hs.eventtap.new({hs.eventtap.event.types.flagsChanged}, safeEventHandler)
+-- Keep watchers in globals so Lua GC will not collect them.
+_G.fnVoiceWatcher = hs.eventtap.new({hs.eventtap.event.types.flagsChanged}, safeFnHandler)
+_G.fnVoiceWatcher:start()
 
-_G.rightCmdWatcher:start()
+_G.fnCombinationWatcher = hs.eventtap.new({hs.eventtap.event.types.keyDown}, safeKeyDownHandler)
+_G.fnCombinationWatcher:start()
 
-alert.show("RightCmdIME 脚本已启动")
-log.i(string.format("目标输入法: %s", TARGET_INPUT_SOURCE))
-log.i(string.format("右 Command keycode=%d", KEYCODE_RIGHT_CMD))
-log.i(string.format("恢复输入法延迟=%.2f 秒", RESTORE_IME_DELAY))
+alert.show("Doubao voice shortcut loaded")
+log.i(string.format("目标输入法 source id: %s", TARGET_INPUT_SOURCE_ID))
+log.i("Fn 轻按：启动/停止豆包语音输入")
+log.i(string.format("Ctrl+Space 仅在 %s / %s 之间切换",
+    NORMAL_CHINESE_INPUT_METHOD, NORMAL_ENGLISH_KEYBOARD_LAYOUT))

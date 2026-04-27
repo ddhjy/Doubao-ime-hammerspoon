@@ -8,6 +8,7 @@
 - 切换到豆包输入法
 - 唤起豆包语音输入
 - 在操作结束后切回原输入法
+- 让日常输入法切换只在你的中文输入法和英文键盘之间进行，不把豆包放进轮换
 
 目标很直接：不把豆包输入法当主输入法用，但把它当成主力语音输入工具来用。
 
@@ -19,7 +20,7 @@
 - 它的语音识别能力却不错，而且免费，单独拿来做语音输入很有价值。
 - 但官方的产品形态更偏向“占住输入法入口”，导致日常使用上必须反复切换，体验并不顺。
 
-“按一个键，立刻开始豆包语音输入，说完后回到原来的输入法”
+“点一下 Fn，立刻开始豆包语音输入；说完再点一下 Fn，回到原来的输入法”
 
 ## 它做了什么
 
@@ -82,18 +83,25 @@ chmod +x ./install.sh
 1. 打开 Hammerspoon。
 2. 第一次运行时，为 Hammerspoon 授予 macOS 的“辅助功能”权限。
 3. 在 Hammerspoon 菜单栏图标中点击 `Reload Config`。
-4. 默认按住并松开右侧 `Command` 键。
-5. 脚本会自动切换到豆包输入法、触发语音输入，并在稍后恢复你原本的输入法。
+4. 轻按一次 `Fn` 键。
+5. 脚本会自动切换到豆包输入法，并通过“左 Option 双击”触发豆包语音输入。
+6. 说完后再轻按一次 `Fn` 键，脚本会结束豆包语音输入，并恢复你原本的输入法。
+7. 日常切换输入法时，按 `Ctrl+Space` 只会在中文输入法和英文键盘之间切换，不会切到豆包。
 
 ## 当前默认行为
 
 当前 [init.lua](./init.lua) 的逻辑是：
 
-- 监听右侧 `Command`
+- 监听单独轻按 `Fn`
 - 记录当前输入法
 - 切换到豆包输入法
-- 模拟双击左侧 `Option`
+- 等待豆包输入法生效
+- 用 `flagsChanged` 事件模拟“双击左侧 Option”，触发豆包语音输入
+- 再次轻按 `Fn` 时，再次双击左侧 `Option` 结束语音输入
 - 延迟恢复到之前的输入法
+- 监听 `Ctrl+Space`，只在 `Squirrel - Simplified` 和 `U.S.` 之间切换；如果当前是豆包，则切回 `U.S.`
+
+这里故意不使用普通的 `keyDown` / `keyUp` 来模拟 `Option`。豆包语音快捷键对纯修饰键事件更敏感，用 `flagsChanged` 更接近真实按键，稳定性更好。
 
 ## 适合谁
 
@@ -107,6 +115,9 @@ chmod +x ./install.sh
 - 只支持 macOS。
 - 需要你已经安装豆包输入法。
 - 需要 Hammerspoon 获得“辅助功能”权限，否则无法模拟按键。
+- 豆包输入法内的语音快捷键需要保持为 `Option`。
+- 如果轻按 `Fn` 时同时触发了 macOS 自带听写，请检查 Hammerspoon 的“辅助功能”权限，或在系统设置里调整 macOS 听写快捷键。
+- 默认中文输入法写的是 `Squirrel - Simplified`，英文键盘写的是 `U.S.`；如果你使用别的中文输入法，需要修改 [init.lua](./init.lua) 里的对应配置。
 - 安装脚本不会自动合并你原有的 Hammerspoon 配置，只会替换或保留现有 `~/.hammerspoon/init.lua`。
 - 如果你已有自己的 Hammerspoon 配置，建议先看清提示；脚本在覆盖前会自动备份。
 
@@ -115,16 +126,21 @@ chmod +x ./install.sh
 当前配置里默认使用这个豆包输入法 ID：
 
 ```lua
-local TARGET_INPUT_SOURCE = "com.bytedance.inputmethod.doubaoime.pinyin"
+local TARGET_INPUT_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
+local TARGET_INPUT_METHOD = "豆包输入法"
+local NORMAL_CHINESE_INPUT_METHOD = "Squirrel - Simplified"
+local NORMAL_ENGLISH_KEYBOARD_LAYOUT = "U.S."
 ```
 
-如果你机器上的输入法 ID 不一致，需要手动修改 [init.lua](./init.lua)，然后在 Hammerspoon 中重新加载配置。
+如果你机器上的输入法 ID、显示名称或日常输入法名称不一致，需要手动修改 [init.lua](./init.lua)，然后在 Hammerspoon 中重新加载配置。
 
 ## 可以继续自定义的地方
 
 你可以按自己的习惯继续改：
 
 - 触发按键
-- 双击 `Option` 的时间间隔
+- `Ctrl+Space` 轮换的中文输入法和英文键盘名称
+- 切换到豆包后触发语音的等待时间
+- 双击 `Option` 的按下时间和间隔
 - 恢复原输入法的延迟
 - 与你现有 Hammerspoon 配置的整合方式
