@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-REPO_OWNER="${REPO_OWNER:-Paxxs}"
+REPO_OWNER="${REPO_OWNER:-ddhjy}"
 REPO_NAME="${REPO_NAME:-Doubao-ime-hammerspoon}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 ARCHIVE_URL="${ARCHIVE_URL:-https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${REPO_BRANCH}.zip}"

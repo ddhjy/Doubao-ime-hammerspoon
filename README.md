@@ -47,13 +47,13 @@
 直接复制下面这条命令到终端执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Paxxs/Doubao-ime-hammerspoon/main/install-remote.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ddhjy/Doubao-ime-hammerspoon/main/install-remote.sh | bash
 ```
 
 如果你明确要覆盖现有的 `~/.hammerspoon/init.lua`，可以用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Paxxs/Doubao-ime-hammerspoon/main/install-remote.sh | bash -s -- --force
+curl -fsSL https://raw.githubusercontent.com/ddhjy/Doubao-ime-hammerspoon/main/install-remote.sh | bash -s -- --force
 ```
 
 这条命令会：
@@ -68,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/Paxxs/Doubao-ime-hammerspoon/main/i
 如果你更希望先把仓库拉到本地，再手动执行安装脚本，也可以这样做：
 
 ```bash
-git clone https://github.com/Paxxs/Doubao-ime-hammerspoon.git
+git clone https://github.com/ddhjy/Doubao-ime-hammerspoon.git
 cd Doubao-ime-hammerspoon
 chmod +x ./install.sh
 ./install.sh
