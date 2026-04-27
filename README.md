@@ -5,6 +5,8 @@
 
 这个项目提供一份 [Hammerspoon](https://www.hammerspoon.org/) 配置和一个一键安装脚本，用来在 macOS 上自动处理：
 
+![按一下 Fn，直接用豆包语音输入](./assets/doubao-fn-voice-message.png)
+
 - 切换到豆包输入法
 - 唤起豆包语音输入
 - 在操作结束后切回原输入法
