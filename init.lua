@@ -35,6 +35,7 @@ local KEYCODE_SPACE = 49
 
 local previousInputSource = nil
 local sourceBeforeFnTap = nil
+local lastNonDoubaoInputSource = nil
 local doubaoVoiceActive = false
 local fnIsDown = false
 local fnWasUsedWithOtherKey = false
@@ -42,11 +43,13 @@ local pendingActionTimer = nil
 local restoreImeTimer = nil
 
 local function nowSource()
+    local sourceID = hs.keycodes.currentSourceID()
     local method = hs.keycodes.currentMethod()
     if method ~= nil then
         return {
             kind = "method",
-            value = method
+            value = method,
+            sourceID = sourceID
         }
     end
 
@@ -54,7 +57,8 @@ local function nowSource()
     if layout ~= nil then
         return {
             kind = "layout",
-            value = layout
+            value = layout,
+            sourceID = sourceID
         }
     end
 
@@ -88,6 +92,35 @@ end
 
 local function isNormalChineseInputMethodActive()
     return hs.keycodes.currentMethod() == NORMAL_CHINESE_INPUT_METHOD
+end
+
+local function defaultNormalChineseInputSource()
+    return {
+        kind = "method",
+        value = NORMAL_CHINESE_INPUT_METHOD
+    }
+end
+
+local function isDoubaoInputSource(source)
+    return source
+        and (source.sourceID == TARGET_INPUT_SOURCE_ID
+            or (source.kind == "method" and source.value == TARGET_INPUT_METHOD))
+end
+
+local function rememberLastNonDoubaoInputSource()
+    local source = nowSource()
+    if source and not isDoubaoInputSource(source) then
+        lastNonDoubaoInputSource = source
+        log.df("记录最近非豆包输入源 %s: %s", tostring(source.kind), tostring(source.value))
+    end
+end
+
+local function restoreTargetFrom(candidate)
+    if candidate and not isDoubaoInputSource(candidate) then
+        return candidate
+    end
+
+    return lastNonDoubaoInputSource or defaultNormalChineseInputSource()
 end
 
 local function waitForInputSource(description, isReady, onReady, deadline)
@@ -127,11 +160,10 @@ end
 
 local function restorePreviousIME()
     if not previousInputSource then
-        log.df("没有记录到之前的输入来源，跳过恢复")
-        return
+        log.df("没有记录到之前的输入来源，恢复到默认中文输入法")
     end
 
-    local old = previousInputSource
+    local old = restoreTargetFrom(previousInputSource)
     local ok = false
 
     if old.kind == "method" then
@@ -205,7 +237,7 @@ end
 
 local function startDoubaoVoice()
     cancelRestoreImeTimer()
-    previousInputSource = sourceBeforeFnTap or nowSource()
+    previousInputSource = restoreTargetFrom(sourceBeforeFnTap or nowSource())
     sourceBeforeFnTap = nil
 
     local function switchToDoubaoAndTrigger()
@@ -370,6 +402,9 @@ _G.fnVoiceWatcher:start()
 
 _G.fnCombinationWatcher = hs.eventtap.new({hs.eventtap.event.types.keyDown}, safeKeyDownHandler)
 _G.fnCombinationWatcher:start()
+
+rememberLastNonDoubaoInputSource()
+hs.keycodes.inputSourceChanged(rememberLastNonDoubaoInputSource)
 
 alert.show("Doubao voice shortcut loaded")
 log.i(string.format("目标输入法 source id: %s", TARGET_INPUT_SOURCE_ID))
