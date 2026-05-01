@@ -20,14 +20,14 @@ local NORMAL_CHINESE_INPUT_METHOD = "Squirrel - Simplified"
 local NORMAL_ENGLISH_KEYBOARD_LAYOUT = "U.S."
 
 -- Timing knobs for the tap-to-toggle model.
-local ACTION_AFTER_FN_UP_DELAY = 0.12
-local VOICE_TRIGGER_AFTER_SWITCH_DELAY = 0.35
+local ACTION_AFTER_FN_UP_DELAY = 0.02
+local VOICE_TRIGGER_AFTER_SWITCH_DELAY = 0.08
 local INPUT_SOURCE_SWITCH_TIMEOUT = 2.0
-local INPUT_SOURCE_POLL_INTERVAL = 0.05
+local INPUT_SOURCE_POLL_INTERVAL = 0.01
 local INPUT_METHOD_BRIDGE_DELAY = 0.15
-local OPTION_TAP_HOLD_DURATION = 0.06
-local OPTION_DOUBLE_TAP_INTERVAL = 0.18
-local RESTORE_AFTER_VOICE_STOP_DELAY = 0.8
+local OPTION_TAP_HOLD_DURATION = 0.025
+local OPTION_DOUBLE_TAP_INTERVAL = 0.07
+local RESTORE_AFTER_VOICE_STOP_DELAY = 0.25
 
 local KEYCODE_OPTION = 58
 local KEYCODE_FN = 63
@@ -80,8 +80,14 @@ local function cancelRestoreImeTimer()
 end
 
 local function setDoubaoIME()
-    local ok = hs.keycodes.setMethod(TARGET_INPUT_METHOD)
-    log.df("切换到豆包输入法: %s, 结果: %s", TARGET_INPUT_METHOD, tostring(ok))
+    local ok = hs.keycodes.currentSourceID(TARGET_INPUT_SOURCE_ID)
+    log.df("按 source id 切换到豆包输入法: %s, 结果: %s", TARGET_INPUT_SOURCE_ID, tostring(ok))
+
+    if not ok then
+        ok = hs.keycodes.setMethod(TARGET_INPUT_METHOD)
+        log.df("按 method 名称切换到豆包输入法: %s, 结果: %s", TARGET_INPUT_METHOD, tostring(ok))
+    end
+
     return ok
 end
 
@@ -183,14 +189,14 @@ local function modifiersAreClear()
 end
 
 local function runWhenModifiersClear(fn, attemptsLeft)
-    attemptsLeft = attemptsLeft or 20
+    attemptsLeft = attemptsLeft or 30
 
     if modifiersAreClear() or attemptsLeft <= 0 then
         fn()
         return
     end
 
-    hs.timer.doAfter(0.05, function()
+    hs.timer.doAfter(0.01, function()
         runWhenModifiersClear(fn, attemptsLeft - 1)
     end)
 end
